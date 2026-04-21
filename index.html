@@ -874,6 +874,14 @@
         return !!(wvjb || bridge) && !isMock;
       }
 
+      function hasBridgeCandidate() {
+        return !!(
+          (window.WebViewJavascriptBridge && typeof window.WebViewJavascriptBridge.callHandler === 'function') ||
+          (window.$bridge && typeof window.$bridge.callHandler === 'function') ||
+          (typeof window.connectWebViewJavascriptBridge === 'function')
+        );
+      }
+
       function buildConfig() {
         var pgid = el.pgid.value.trim() || '1.15.2';
         return {
@@ -909,15 +917,9 @@
         };
       }
 
-      function ensureSdk() {
+      async function ensureSdk() {
         if (sdk) return;
 
-        if (!hasRealBridge()) {
-          setCheck(el.cBridge, 'bad', '失败');
-          throw new Error('未检测到真实 App bridge，请在 App WebView 中打开此页');
-        }
-
-        setCheck(el.cBridge, 'ok', '通过');
         window.__UNIFIED_REWARD_CONFIG = buildConfig();
 
         sdk = window.UnifiedRewardSDK.create({
@@ -928,6 +930,19 @@
 
         sdk.onDisconnectVideo(function (result) {
           log('收到 disConnectVideo', result);
+        });
+
+        await new Promise(function (resolve, reject) {
+          sdk.detectBridge(function (err) {
+            if (err) {
+              setCheck(el.cBridge, 'bad', '失败');
+              sdk = null;
+              reject(new Error('bridge 握手失败：' + err.message));
+              return;
+            }
+            setCheck(el.cBridge, 'ok', '通过');
+            resolve();
+          });
         });
       }
 
@@ -1005,19 +1020,24 @@
         });
       }
 
-      el.btnInit.addEventListener('click', function () {
+      el.btnInit.addEventListener('click', async function () {
         try {
-          ensureSdk();
+          await ensureSdk();
           checkRoute(el.platform.value);
           log('初始化完成（真实 bridge 模式）', { device: detectDevice() });
         } catch (e) {
-          log('初始化失败', { message: e.message });
+          log('初始化失败', {
+            message: e.message,
+            hasBridgeCandidate: hasBridgeCandidate(),
+            hasRealBridge: hasRealBridge(),
+            hasConnectFunction: typeof window.connectWebViewJavascriptBridge === 'function'
+          });
         }
       });
 
       el.btnAd.addEventListener('click', async function () {
         try {
-          ensureSdk();
+          await ensureSdk();
           await doRequestAd();
         } catch (e) {
           log('adRequest 失败', { message: e.message });
@@ -1026,7 +1046,7 @@
 
       el.btnPreload.addEventListener('click', async function () {
         try {
-          ensureSdk();
+          await ensureSdk();
           await doPreload();
         } catch (e) {
           log('preLoadVideo 失败', { message: e.message });
@@ -1035,7 +1055,7 @@
 
       el.btnShow.addEventListener('click', async function () {
         try {
-          ensureSdk();
+          await ensureSdk();
           await doShow();
         } catch (e) {
           log('connectVideo 失败', { message: e.message });
@@ -1045,7 +1065,7 @@
       el.btnRunAll.addEventListener('click', async function () {
         resetChecksForRun();
         try {
-          ensureSdk();
+          await ensureSdk();
           await doRequestAd();
           await doPreload();
           await doShow();
