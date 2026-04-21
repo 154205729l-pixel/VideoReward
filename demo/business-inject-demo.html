@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>业务接入 Demo（注入版）</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --card: #fff;
+      --line: #d9e1ed;
+      --text: #12243a;
+      --sub: #4f6884;
+      --brand: #0f766e;
+      --brand2: #0f4c81;
+      --warn: #b45309;
+      --bad: #b91c1c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 0 0, #e7f4f1, var(--bg) 42%);
+      color: var(--text);
+      font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 16px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 12px;
+      box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
+    }
+    h1 { margin: 0 0 8px; font-size: 20px; }
+    p.tip { margin: 4px 0; font-size: 13px; color: var(--sub); line-height: 1.5; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    @media (max-width: 760px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    label { display: block; margin-bottom: 4px; color: var(--sub); font-size: 13px; }
+    input, select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 14px;
+      color: var(--text);
+      background: #fff;
+    }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: #fff;
+      background: var(--brand);
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button.secondary { background: var(--brand2); }
+    button.warn { background: var(--warn); }
+    button.bad { background: var(--bad); }
+    .status { display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; color: var(--sub); margin-bottom: 10px; }
+    .status strong { color: var(--text); }
+    pre {
+      margin: 0;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #0b1020;
+      color: #dbeafe;
+      overflow: auto;
+      max-height: 360px;
+      font-size: 12px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .small { color: var(--sub); font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>业务接入 Demo（JS 注入版）</h1>
+      <p class="tip">业务只填决策节点，不需要感知底层广告参数。</p>
+      <p class="tip">失败只回传失败结果，Plan B 由业务自己决定。</p>
+    </div>
+
+    <div class="card">
+      <div class="grid">
+        <div>
+          <label for="sdkUrl">SDK JS 地址（注入）</label>
+          <input id="sdkUrl" value="../unified-reward-bridge.js" />
+        </div>
+        <div>
+          <label for="entry">触发入口</label>
+          <input id="entry" value="battle_fail_popup" />
+        </div>
+        <div>
+          <label for="requestTiming">请求时机</label>
+          <select id="requestTiming">
+            <option value="after_click">点击后再请求</option>
+            <option value="page_enter">进入页面即请求</option>
+          </select>
+        </div>
+        <div>
+          <label for="playTrigger">播放触发</label>
+          <input id="playTrigger" value="click_reward_button" />
+        </div>
+      </div>
+
+      <div class="actions" style="margin-top:10px;">
+        <button class="secondary" id="btnInject">1. 注入 SDK JS</button>
+        <button class="secondary" id="btnInit">2. 初始化 SDK</button>
+        <button id="btnRequest">3. 请求+预加载</button>
+        <button id="btnShow">4. 仅播放</button>
+        <button class="warn" id="btnAll">一键请求并播放</button>
+        <button class="bad" id="btnClear">清空日志</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="status">
+        <div>设备识别: <strong id="deviceState">-</strong></div>
+        <div>Bridge: <strong id="bridgeState">-</strong></div>
+        <div>SDK 注入: <strong id="sdkState">未注入</strong></div>
+      </div>
+      <div class="small" style="margin-bottom:8px;">当前业务决策</div>
+      <pre id="decisionPanel">{}</pre>
+    </div>
+
+    <div class="card">
+      <div class="small" style="margin-bottom:8px;">统一结果回调（给业务）</div>
+      <pre id="resultPanel">{}</pre>
+    </div>
+
+    <div class="card">
+      <div class="small" style="margin-bottom:8px;">运行日志</div>
+      <pre id="logPanel"></pre>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var sdk = null;
+      var payload = null;
+
+      var el = {
+        sdkUrl: document.getElementById('sdkUrl'),
+        entry: document.getElementById('entry'),
+        requestTiming: document.getElementById('requestTiming'),
+        playTrigger: document.getElementById('playTrigger'),
+        btnInject: document.getElementById('btnInject'),
+        btnInit: document.getElementById('btnInit'),
+        btnRequest: document.getElementById('btnRequest'),
+        btnShow: document.getElementById('btnShow'),
+        btnAll: document.getElementById('btnAll'),
+        btnClear: document.getElementById('btnClear'),
+        deviceState: document.getElementById('deviceState'),
+        bridgeState: document.getElementById('bridgeState'),
+        sdkState: document.getElementById('sdkState'),
+        decisionPanel: document.getElementById('decisionPanel'),
+        resultPanel: document.getElementById('resultPanel'),
+        logPanel: document.getElementById('logPanel')
+      };
+
+      function log(title, data) {
+        var line = '[' + new Date().toLocaleTimeString() + '] ' + title;
+        if (typeof data !== 'undefined') {
+          try {
+            line += '\n' + JSON.stringify(data, null, 2);
+          } catch (e) {
+            line += '\n' + String(data);
+          }
+        }
+        el.logPanel.textContent += line + '\n\n';
+        el.logPanel.scrollTop = el.logPanel.scrollHeight;
+      }
+
+      function detectDevice() {
+        var ua = navigator.userAgent.toLowerCase();
+        if (/android/.test(ua)) return 'android';
+        if (/iphone|ipad|ipod|ios/.test(ua)) return 'ios';
+        return 'unknown';
+      }
+
+      function getDecision() {
+        return {
+          entry: el.entry.value.trim() || 'battle_fail_popup',
+          request_timing: el.requestTiming.value,
+          play_trigger: el.playTrigger.value.trim() || 'click_reward_button',
+          success_rule: 'native_callback_success',
+          failure_rule: 'return_fail_result'
+        };
+      }
+
+      function renderDecision() {
+        el.decisionPanel.textContent = JSON.stringify(getDecision(), null, 2);
+      }
+
+      function setResult(result) {
+        el.resultPanel.textContent = JSON.stringify(result, null, 2);
+      }
+
+      function reportSuccess(stage, detail) {
+        var result = {
+          status: 'success',
+          stage: stage,
+          reason: '',
+          detail: detail || null
+        };
+        setResult(result);
+        log('业务结果回调（success）', result);
+      }
+
+      function reportFail(stage, error, detail) {
+        var result = {
+          status: 'fail',
+          stage: stage,
+          reason: error && error.message ? error.message : String(error || 'unknown_error'),
+          detail: detail || null
+        };
+        setResult(result);
+        log('业务结果回调（fail）', result);
+      }
+
+      function updateBaseState() {
+        var hasBridge = !!(
+          (window.WebViewJavascriptBridge && typeof window.WebViewJavascriptBridge.callHandler === 'function') ||
+          (window.$bridge && typeof window.$bridge.callHandler === 'function') ||
+          (typeof window.connectWebViewJavascriptBridge === 'function')
+        );
+        el.deviceState.textContent = detectDevice();
+        el.bridgeState.textContent = hasBridge ? '检测到' : '未检测到';
+        el.sdkState.textContent = window.UnifiedRewardSDK ? '已注入' : '未注入';
+      }
+
+      function injectUnifiedSdk(src) {
+        return new Promise(function (resolve, reject) {
+          if (window.UnifiedRewardSDK) {
+            resolve({ already: true });
+            return;
+          }
+          var s = document.createElement('script');
+          s.src = src;
+          s.async = true;
+          s.onload = function () {
+            if (!window.UnifiedRewardSDK) {
+              reject(new Error('JS 已加载，但未找到 UnifiedRewardSDK'));
+              return;
+            }
+            resolve({ loaded: true });
+          };
+          s.onerror = function () {
+            reject(new Error('SDK JS 注入失败，请检查地址是否可访问'));
+          };
+          document.head.appendChild(s);
+        });
+      }
+
+      function applyBizConfig() {
+        var decision = getDecision();
+        window.__UNIFIED_REWARD_CONFIG = {
+          platform: 'auto',
+          behavior: {
+            callbackTimeout: 8000,
+            bridgeDetectTimeout: 5000
+          },
+          reward: {
+            data: JSON.stringify({
+              entry: decision.entry,
+              play_trigger: decision.play_trigger
+            })
+          }
+        };
+        return decision;
+      }
+
+      async function ensureSdk() {
+        if (sdk) return sdk;
+        if (!window.UnifiedRewardSDK) {
+          throw new Error('还没注入 SDK JS，请先点“1. 注入 SDK JS”');
+        }
+
+        applyBizConfig();
+        sdk = window.UnifiedRewardSDK.create({
+          onLog: function (title, data) {
+            log('SDK: ' + title, data);
+          }
+        });
+
+        await new Promise(function (resolve, reject) {
+          sdk.detectBridge(function (err) {
+            if (err) {
+              reject(new Error('bridge 检测失败：' + err.message));
+              return;
+            }
+            resolve();
+          });
+        });
+
+        sdk.onDisconnectVideo(function (result) {
+          log('收到播放结果回调', result);
+        });
+
+        return sdk;
+      }
+
+      function requestAndPreload() {
+        sdk.requestAndPreload(function (err, nextPayload, detail) {
+          if (err) {
+            reportFail('request', err, null);
+            return;
+          }
+          payload = nextPayload;
+          log('请求+预加载成功', { detail: detail });
+          reportSuccess('preload', detail);
+        });
+      }
+
+      function showOnly() {
+        sdk.show(payload, function (err, response, meta) {
+          if (err) {
+            reportFail('show', err, { response: response, meta: meta });
+            return;
+          }
+          if (meta && meta.timeout) {
+            reportFail('show', new Error('connectVideo 回调超时'), { response: response, meta: meta });
+            return;
+          }
+          log('播放触发成功', { response: response, meta: meta });
+          reportSuccess('show', { response: response, meta: meta });
+        });
+      }
+
+      el.btnInject.addEventListener('click', async function () {
+        try {
+          var src = el.sdkUrl.value.trim();
+          if (!src) throw new Error('SDK JS 地址不能为空');
+          var ret = await injectUnifiedSdk(src);
+          updateBaseState();
+          renderDecision();
+          log('SDK JS 注入成功', { src: src, detail: ret });
+        } catch (e) {
+          updateBaseState();
+          reportFail('inject', e, null);
+        }
+      });
+
+      el.btnInit.addEventListener('click', async function () {
+        try {
+          await ensureSdk();
+          updateBaseState();
+          renderDecision();
+          log('SDK 初始化成功（bridge 已握手）');
+
+          if (el.requestTiming.value === 'page_enter') {
+            requestAndPreload();
+          }
+        } catch (e) {
+          updateBaseState();
+          reportFail('bridge', e, null);
+        }
+      });
+
+      el.btnRequest.addEventListener('click', async function () {
+        try {
+          await ensureSdk();
+          requestAndPreload();
+        } catch (e) {
+          reportFail('request', e, null);
+        }
+      });
+
+      el.btnShow.addEventListener('click', async function () {
+        try {
+          await ensureSdk();
+          showOnly();
+        } catch (e) {
+          reportFail('show', e, null);
+        }
+      });
+
+      el.btnAll.addEventListener('click', async function () {
+        try {
+          await ensureSdk();
+          sdk.requestPreloadAndShow(function (err, detail) {
+            if (err) {
+              reportFail('request_preload_or_show', err, null);
+              return;
+            }
+            payload = detail.payload;
+            log('一键流程成功', { detail: detail });
+            reportSuccess('show', detail);
+          });
+        } catch (e) {
+          reportFail('request_preload_or_show', e, null);
+        }
+      });
+
+      el.btnClear.addEventListener('click', function () {
+        el.logPanel.textContent = '';
+      });
+
+      ['entry', 'requestTiming', 'playTrigger'].forEach(function (id) {
+        document.getElementById(id).addEventListener('change', renderDecision);
+      });
+
+      updateBaseState();
+      renderDecision();
+      log('页面已就绪：先注入 SDK，再初始化。');
+    })();
+  </script>
+</body>
+</html>
